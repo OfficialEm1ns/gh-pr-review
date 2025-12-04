@@ -205,8 +205,7 @@ func newReviewPendingIDCommand() *cobra.Command {
 	cmd.Flags().StringVarP(&opts.Repo, "repo", "R", "", "Repository in 'owner/repo' format")
 	cmd.Flags().IntVar(&opts.Pull, "pr", 0, "Pull request number")
 	cmd.Flags().StringVar(&opts.Reviewer, "reviewer", "", "Reviewer login (defaults to authenticated user)")
-	cmd.Flags().IntVar(&opts.PerPage, "per_page", 0, "Number of reviews per page (REST)")
-	cmd.Flags().IntVar(&opts.Page, "page", 0, "Page index for the initial REST request")
+	cmd.Flags().IntVar(&opts.PerPage, "per_page", 0, "Number of reviews to request from GraphQL (max 100)")
 
 	return cmd
 }
@@ -217,7 +216,6 @@ type reviewPendingOptions struct {
 	Selector string
 	Reviewer string
 	PerPage  int
-	Page     int
 }
 
 func runReviewPendingID(cmd *cobra.Command, opts *reviewPendingOptions) error {
@@ -236,7 +234,6 @@ func runReviewPendingID(cmd *cobra.Command, opts *reviewPendingOptions) error {
 	summary, err := service.LatestPending(identity, reviewsvc.PendingOptions{
 		Reviewer: opts.Reviewer,
 		PerPage:  opts.PerPage,
-		Page:     opts.Page,
 	})
 	if err != nil {
 		return err

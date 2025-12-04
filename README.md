@@ -105,6 +105,9 @@ GitHub Enterprise environments.
 Emit minimal JSON for frequently needed identifiers:
 
 ```sh
+# Locate the latest pending review for a reviewer (GraphQL only)
+gh pr-review review pending-id --per_page 100 --reviewer octocat owner/repo#42
+
 # Locate the latest submitted review for a reviewer
 gh pr-review review latest-id --per_page 100 --page 1 --reviewer octocat owner/repo#42
 
@@ -116,8 +119,10 @@ gh pr-review threads find --comment_id 2582545223 owner/repo#42
 ```
 
 Outputs are pure JSON with REST/GraphQL field names and include only fields that
-are present from the source APIs (no null placeholders). The `threads find`
-command always emits exactly `{ "id", "isResolved" }`.
+are present from the source APIs (no null placeholders). Pending-review helpers
+use GitHub's GraphQL API exclusively and fail fast if required payloads are
+missing. The `threads find` command always emits exactly `{ "id",
+"isResolved" }`.
 
 ## Output conventions
 

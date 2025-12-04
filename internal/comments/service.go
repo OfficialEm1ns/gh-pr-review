@@ -10,6 +10,7 @@ import (
 
 	"github.com/Agyn-sandbox/gh-pr-review/internal/ghcli"
 	"github.com/Agyn-sandbox/gh-pr-review/internal/resolver"
+	review "github.com/Agyn-sandbox/gh-pr-review/internal/review"
 )
 
 const autoSubmitSummary = "Auto-submitting pending review to unblock threaded reply via gh-pr-review."
@@ -205,16 +206,17 @@ func (s *Service) autoSubmitPendingReviews(pr resolver.Identity) error {
 		return err
 	}
 
-	pending, err := s.pendingReviews(pr, login)
+	reviewSvc := review.NewService(s.API)
+	summaries, _, err := reviewSvc.PendingSummaries(pr, review.PendingOptions{Reviewer: login, PerPage: 100})
 	if err != nil {
 		return err
 	}
-	if len(pending) == 0 {
+	if len(summaries) == 0 {
 		return fmt.Errorf("no pending reviews owned by %s found on pull request #%d", login, pr.Number)
 	}
 
-	for _, reviewID := range pending {
-		path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews/%d/events", pr.Owner, pr.Repo, pr.Number, reviewID)
+	for _, pending := range summaries {
+		path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews/%d/events", pr.Owner, pr.Repo, pr.Number, pending.DatabaseID)
 		payload := map[string]interface{}{
 			"event": "COMMENT",
 			"body":  autoSubmitSummary,
@@ -224,47 +226,4 @@ func (s *Service) autoSubmitPendingReviews(pr resolver.Identity) error {
 		}
 	}
 	return nil
-}
-
-func (s *Service) pendingReviews(pr resolver.Identity, reviewer string) ([]int64, error) {
-	var ids []int64
-	page := 1
-	for {
-		var reviews []struct {
-			ID    int64  `json:"id"`
-			State string `json:"state"`
-			User  struct {
-				Login string `json:"login"`
-			} `json:"user"`
-		}
-
-		params := map[string]string{
-			"per_page": "100",
-			"page":     strconv.Itoa(page),
-		}
-		path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", pr.Owner, pr.Repo, pr.Number)
-		if err := s.API.REST("GET", path, params, nil, &reviews); err != nil {
-			return nil, err
-		}
-
-		if len(reviews) == 0 {
-			break
-		}
-
-		for _, review := range reviews {
-			if !strings.EqualFold(review.User.Login, reviewer) {
-				continue
-			}
-			if strings.EqualFold(review.State, "PENDING") {
-				ids = append(ids, review.ID)
-			}
-		}
-
-		if len(reviews) < 100 {
-			break
-		}
-		page++
-	}
-
-	return ids, nil
 }

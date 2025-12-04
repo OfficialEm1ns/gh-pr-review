@@ -343,63 +343,52 @@ func TestReviewPendingIDCommand_GraphQLOnly(t *testing.T) {
 	defer func() { apiClientFactory = originalFactory }()
 
 	fake := &commandFakeAPI{}
-	call := 0
 	fake.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
-		call++
-		switch call {
-		case 1:
-			payload := obj{
-				"data": obj{
-					"viewer": obj{
-						"login":      "casey",
-						"databaseId": 77,
-					},
+		payload := obj{
+			"data": obj{
+				"viewer": obj{
+					"login":      "casey",
+					"databaseId": 77,
 				},
-			}
-			return assignJSON(result, payload)
-		default:
-			payload := obj{
-				"data": obj{
-					"repository": obj{
-						"pullRequest": obj{
-							"reviews": obj{
-								"nodes": objSlice{
-									obj{
-										"id":         "PRR_node_old",
-										"databaseId": 10,
-										"url":        "https://example.com/review/10",
-										"state":      "PENDING",
-										"author": obj{
-											"login":      "casey",
-											"databaseId": 77,
-										},
-										"updatedAt": "2024-06-01T12:00:00Z",
-										"createdAt": "2024-06-01T11:00:00Z",
+				"repository": obj{
+					"pullRequest": obj{
+						"reviews": obj{
+							"nodes": objSlice{
+								obj{
+									"id":         "PRR_node_old",
+									"databaseId": 10,
+									"url":        "https://example.com/review/10",
+									"state":      "PENDING",
+									"author": obj{
+										"login":      "casey",
+										"databaseId": 77,
 									},
-									obj{
-										"id":         "PRR_node_new",
-										"databaseId": 22,
-										"url":        "https://example.com/review/22",
-										"state":      "PENDING",
-										"author": obj{
-											"login":      "casey",
-											"databaseId": 77,
-										},
-										"updatedAt": "2024-06-01T13:00:00Z",
-										"createdAt": "2024-06-01T12:30:00Z",
+									"updatedAt": "2024-06-01T12:00:00Z",
+									"createdAt": "2024-06-01T11:00:00Z",
+								},
+								obj{
+									"id":         "PRR_node_new",
+									"databaseId": 22,
+									"url":        "https://example.com/review/22",
+									"state":      "PENDING",
+									"author": obj{
+										"login":      "casey",
+										"databaseId": 77,
 									},
+									"updatedAt": "2024-06-01T13:00:00Z",
+									"createdAt": "2024-06-01T12:30:00Z",
 								},
-								"pageInfo": obj{
-									"hasNextPage": false,
-									"endCursor":   "",
-								},
+							},
+							"pageInfo": obj{
+								"hasNextPage": false,
+								"endCursor":   "",
 							},
 						},
 					},
 				},
-			}
-			return assignJSON(result, payload)
+			},
 		}
+		return assignJSON(result, payload)
 	}
 	apiClientFactory = func(host string) ghcli.API { return fake }
 

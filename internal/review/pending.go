@@ -1,9 +1,11 @@
 package review
 
 import (
+	"errors"
 	"fmt"
-	"strconv"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/Agyn-sandbox/gh-pr-review/internal/resolver"
 )
@@ -12,7 +14,6 @@ import (
 type PendingOptions struct {
 	Reviewer string
 	PerPage  int
-	Page     int
 }
 
 // PendingSummary captures pending review metadata for output.
@@ -25,81 +26,215 @@ type PendingSummary struct {
 	User              *ReviewUser `json:"user,omitempty"`
 }
 
-// LatestPending locates the most recent pending review for the requested reviewer.
-func (s *Service) LatestPending(pr resolver.Identity, opts PendingOptions) (*PendingSummary, error) {
-	reviewer := strings.TrimSpace(opts.Reviewer)
-	if reviewer == "" {
-		login, err := s.currentLogin()
-		if err != nil {
-			return nil, fmt.Errorf("resolve authenticated user: %w", err)
-		}
-		reviewer = login
+// PendingSummaries retrieves pending reviews for the requested reviewer.
+
+func (s *Service) PendingSummaries(pr resolver.Identity, opts PendingOptions) ([]PendingSummary, string, error) {
+	reviewerFilter := strings.TrimSpace(opts.Reviewer)
+	reviewer := reviewerFilter
+	perPage := clampPerPage(opts.PerPage)
+
+	query := `query PendingReviews($owner: String!, $name: String!, $number: Int!, $pageSize: Int!, $cursor: String) {
+  viewer {
+    login
+    databaseId
+  }
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviews(states: [PENDING], first: $pageSize, after: $cursor) {
+        nodes {
+          id
+          databaseId
+          state
+          authorAssociation
+          url
+          updatedAt
+          createdAt
+          author {
+            login
+            databaseId
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}`
+
+	type pendingNode struct {
+		ID                string `json:"id"`
+		DatabaseID        *int64 `json:"databaseId"`
+		State             string `json:"state"`
+		AuthorAssociation string `json:"authorAssociation"`
+		URL               string `json:"url"`
+		UpdatedAt         string `json:"updatedAt"`
+		CreatedAt         string `json:"createdAt"`
+		Author            *struct {
+			Login      string `json:"login"`
+			DatabaseID *int64 `json:"databaseId"`
+		} `json:"author"`
 	}
 
-	perPage := clampPerPage(opts.PerPage)
-	page := opts.Page
-	if page <= 0 {
-		page = 1
+	var response struct {
+		Data struct {
+			Viewer struct {
+				Login      string `json:"login"`
+				DatabaseID *int64 `json:"databaseId"`
+			} `json:"viewer"`
+			Repository *struct {
+				PullRequest *struct {
+					Reviews *struct {
+						Nodes    []pendingNode `json:"nodes"`
+						PageInfo struct {
+							HasNextPage bool   `json:"hasNextPage"`
+							EndCursor   string `json:"endCursor"`
+						} `json:"pageInfo"`
+					} `json:"reviews"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+
+	type timedSummary struct {
+		summary PendingSummary
+		when    time.Time
 	}
 
 	var (
-		latestPending restReview
-		found         bool
+		timedSummaries []timedSummary
+		cursor         string
+		hasCursor      bool
 	)
 
-	for current := page; ; current++ {
-		var chunk []restReview
-		params := map[string]string{
-			"per_page": strconv.Itoa(perPage),
-			"page":     strconv.Itoa(current),
+	for {
+		variables := map[string]interface{}{
+			"owner":    pr.Owner,
+			"name":     pr.Repo,
+			"number":   pr.Number,
+			"pageSize": perPage,
 		}
-		path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", pr.Owner, pr.Repo, pr.Number)
-		if err := s.API.REST("GET", path, params, nil, &chunk); err != nil {
-			return nil, err
+		if hasCursor {
+			variables["cursor"] = cursor
 		}
 
-		if len(chunk) == 0 {
+		if err := s.API.GraphQL(query, variables, &response); err != nil {
+			return nil, "", err
+		}
+
+		if reviewerFilter == "" {
+			login := strings.TrimSpace(response.Data.Viewer.Login)
+			if login == "" {
+				return nil, "", errors.New("viewer login unavailable")
+			}
+			reviewer = login
+		} else if reviewer == "" {
+			reviewer = reviewerFilter
+		}
+
+		repo := response.Data.Repository
+		if repo == nil || repo.PullRequest == nil || repo.PullRequest.Reviews == nil {
+			return nil, reviewer, fmt.Errorf("pull request %s/%s#%d not found", pr.Owner, pr.Repo, pr.Number)
+		}
+
+		reviews := repo.PullRequest.Reviews
+		filterLogin := reviewer
+		for _, node := range reviews.Nodes {
+			if filterLogin == "" {
+				continue
+			}
+			var authorLogin string
+			if node.Author != nil {
+				authorLogin = strings.TrimSpace(node.Author.Login)
+			}
+			if authorLogin == "" || !strings.EqualFold(authorLogin, filterLogin) {
+				continue
+			}
+
+			id := strings.TrimSpace(node.ID)
+			if id == "" {
+				return nil, reviewer, errors.New("pending review missing node identifier")
+			}
+			if node.DatabaseID == nil {
+				return nil, reviewer, errors.New("pending review missing database identifier")
+			}
+
+			timestamp := strings.TrimSpace(node.UpdatedAt)
+			if timestamp == "" {
+				timestamp = strings.TrimSpace(node.CreatedAt)
+			}
+			if timestamp == "" {
+				return nil, reviewer, errors.New("pending review missing timestamp")
+			}
+			when, err := time.Parse(time.RFC3339, timestamp)
+			if err != nil {
+				return nil, reviewer, fmt.Errorf("parse pending review timestamp: %w", err)
+			}
+
+			summary := PendingSummary{
+				ID:                id,
+				DatabaseID:        *node.DatabaseID,
+				State:             strings.ToUpper(strings.TrimSpace(node.State)),
+				AuthorAssociation: strings.TrimSpace(node.AuthorAssociation),
+				HTMLURL:           strings.TrimSpace(node.URL),
+			}
+			userID := int64(0)
+			if node.Author != nil && node.Author.DatabaseID != nil {
+				userID = *node.Author.DatabaseID
+			}
+			if authorLogin != "" || userID != 0 {
+				summary.User = &ReviewUser{Login: authorLogin, ID: userID}
+			}
+
+			timedSummaries = append(timedSummaries, timedSummary{summary: summary, when: when})
+		}
+
+		if !reviews.PageInfo.HasNextPage {
 			break
 		}
 
-		for _, review := range chunk {
-			if !strings.EqualFold(review.User.Login, reviewer) {
-				continue
-			}
-			if !strings.EqualFold(strings.TrimSpace(review.State), "PENDING") {
-				continue
-			}
-			if !found || review.ID > latestPending.ID {
-				latestPending = review
-				found = true
-			}
+		nextCursor := strings.TrimSpace(reviews.PageInfo.EndCursor)
+		if nextCursor == "" {
+			return nil, reviewer, errors.New("pending review pagination cursor missing")
 		}
-
-		if len(chunk) < perPage {
-			break
-		}
+		cursor = nextCursor
+		hasCursor = true
 	}
 
-	if !found {
+	if reviewer == "" {
+		reviewer = reviewerFilter
+	}
+
+	if len(timedSummaries) == 0 {
+		return nil, reviewer, fmt.Errorf("no pending reviews for %s", reviewer)
+	}
+
+	sort.Slice(timedSummaries, func(i, j int) bool {
+		if timedSummaries[i].when.Equal(timedSummaries[j].when) {
+			return timedSummaries[i].summary.DatabaseID < timedSummaries[j].summary.DatabaseID
+		}
+		return timedSummaries[i].when.Before(timedSummaries[j].when)
+	})
+
+	summaries := make([]PendingSummary, len(timedSummaries))
+	for i, item := range timedSummaries {
+		summaries[i] = item.summary
+	}
+
+	return summaries, reviewer, nil
+}
+
+// LatestPending locates the most recent pending review for the requested reviewer.
+func (s *Service) LatestPending(pr resolver.Identity, opts PendingOptions) (*PendingSummary, error) {
+	summaries, reviewer, err := s.PendingSummaries(pr, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(summaries) == 0 {
 		return nil, fmt.Errorf("no pending reviews for %s", reviewer)
 	}
 
-	nodeID := strings.TrimSpace(latestPending.NodeID)
-	if nodeID == "" {
-		return nil, fmt.Errorf("pending review %d missing node identifier", latestPending.ID)
-	}
-
-	summary := PendingSummary{
-		ID:                nodeID,
-		DatabaseID:        latestPending.ID,
-		State:             strings.ToUpper(strings.TrimSpace(latestPending.State)),
-		AuthorAssociation: strings.TrimSpace(latestPending.AuthorAssociation),
-		HTMLURL:           strings.TrimSpace(latestPending.HTMLURL),
-	}
-	login := strings.TrimSpace(latestPending.User.Login)
-	if login != "" || latestPending.User.ID != 0 {
-		summary.User = &ReviewUser{Login: login, ID: latestPending.User.ID}
-	}
-
-	return &summary, nil
+	latest := summaries[len(summaries)-1]
+	return &latest, nil
 }
