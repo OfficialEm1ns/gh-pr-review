@@ -102,10 +102,10 @@ func TestReviewSubmitCommand(t *testing.T) {
 				"submitPullRequestReview": map[string]interface{}{
 					"pullRequestReview": map[string]interface{}{
 						"id":          "RV1",
-						"state":       "COMMENTED",
-						"submittedAt": "2024-05-01T12:00:00Z",
+						"state":       " COMMENTED ",
+						"submittedAt": "2024-05-01T12:00:00Z ",
 						"databaseId":  99,
-						"url":         "https://example.com/review/RV1",
+						"url":         " https://example.com/review/RV1 ",
 					},
 				},
 			},

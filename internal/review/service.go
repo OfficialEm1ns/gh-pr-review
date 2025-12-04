@@ -1,6 +1,7 @@
 package review
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -191,13 +192,7 @@ func (s *Service) Submit(pr resolver.Identity, input SubmitInput) (*ReviewState,
 	var response struct {
 		Data struct {
 			SubmitPullRequestReview struct {
-				PullRequestReview struct {
-					ID          string  `json:"id"`
-					State       string  `json:"state"`
-					SubmittedAt *string `json:"submittedAt"`
-					DatabaseID  *int64  `json:"databaseId"`
-					URL         string  `json:"url"`
-				} `json:"pullRequestReview"`
+				PullRequestReview json.RawMessage `json:"pullRequestReview"`
 			} `json:"submitPullRequestReview"`
 		} `json:"data"`
 	}
@@ -206,11 +201,34 @@ func (s *Service) Submit(pr resolver.Identity, input SubmitInput) (*ReviewState,
 		return nil, err
 	}
 
-	review := response.Data.SubmitPullRequestReview.PullRequestReview
+	raw := response.Data.SubmitPullRequestReview.PullRequestReview
+	if len(raw) == 0 {
+		return nil, errors.New("submit review response missing pullRequestReview")
+	}
+
+	var review struct {
+		ID          string  `json:"id"`
+		State       string  `json:"state"`
+		SubmittedAt *string `json:"submittedAt"`
+		DatabaseID  *int64  `json:"databaseId"`
+		URL         string  `json:"url"`
+	}
+	if err := json.Unmarshal(raw, &review); err != nil {
+		return nil, fmt.Errorf("decode submit review: %w", err)
+	}
+
+	var submittedAt *string
+	if review.SubmittedAt != nil {
+		trimmed := strings.TrimSpace(*review.SubmittedAt)
+		if trimmed != "" {
+			submittedAt = &trimmed
+		}
+	}
+
 	state := ReviewState{
-		ID:          review.ID,
-		State:       review.State,
-		SubmittedAt: review.SubmittedAt,
+		ID:          strings.TrimSpace(review.ID),
+		State:       strings.TrimSpace(review.State),
+		SubmittedAt: submittedAt,
 		DatabaseID:  review.DatabaseID,
 		HTMLURL:     strings.TrimSpace(review.URL),
 	}

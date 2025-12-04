@@ -93,11 +93,11 @@ func TestServiceSubmit(t *testing.T) {
 			"data": map[string]interface{}{
 				"submitPullRequestReview": map[string]interface{}{
 					"pullRequestReview": map[string]interface{}{
-						"id":          "RV1",
-						"state":       "COMMENTED",
-						"submittedAt": "2024-05-01T12:00:00Z",
+						"id":          " RV1 ",
+						"state":       "COMMENTED ",
+						"submittedAt": " 2024-05-01T12:00:00Z ",
 						"databaseId":  654,
-						"url":         "https://example.com/review/RV1",
+						"url":         "https://example.com/review/RV1 ",
 					},
 				},
 			},
