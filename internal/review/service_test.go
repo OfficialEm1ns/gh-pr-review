@@ -118,6 +118,49 @@ func TestServiceSubmit(t *testing.T) {
 	assert.Equal(t, "https://example.com/review/RV1", state.HTMLURL)
 }
 
+func TestServiceSubmitFallsBackToREST(t *testing.T) {
+	api := &fakeAPI{}
+	api.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
+		payload := map[string]interface{}{
+			"data": map[string]interface{}{
+				"submitPullRequestReview": map[string]interface{}{
+					"pullRequestReview": nil,
+				},
+			},
+		}
+		return assign(result, payload)
+	}
+	api.restFunc = func(method, path string, params map[string]string, body interface{}, result interface{}) error {
+		require.Equal(t, "GET", method)
+		require.Equal(t, "repos/octo/demo/pulls/7/reviews", path)
+		require.Equal(t, "100", params["per_page"])
+		require.Equal(t, "1", params["page"])
+		payload := []map[string]interface{}{
+			{
+				"id":           777,
+				"node_id":      "RV1",
+				"state":        "APPROVED",
+				"submitted_at": "2024-06-01T15:04:05Z",
+				"html_url":     "https://example.com/review/RV1",
+			},
+		}
+		return assign(result, payload)
+	}
+
+	svc := NewService(api)
+	pr := resolver.Identity{Owner: "octo", Repo: "demo", Number: 7, Host: "github.com"}
+	state, err := svc.Submit(pr, SubmitInput{ReviewID: "RV1", Event: "APPROVE"})
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	assert.Equal(t, "RV1", state.ID)
+	assert.Equal(t, "APPROVED", state.State)
+	require.NotNil(t, state.SubmittedAt)
+	assert.Equal(t, "2024-06-01T15:04:05Z", *state.SubmittedAt)
+	require.NotNil(t, state.DatabaseID)
+	assert.Equal(t, int64(777), *state.DatabaseID)
+	assert.Equal(t, "https://example.com/review/RV1", state.HTMLURL)
+}
+
 func assign(result interface{}, payload interface{}) error {
 	data, err := json.Marshal(payload)
 	if err != nil {

@@ -134,6 +134,59 @@ func TestReviewSubmitCommand(t *testing.T) {
 	assert.Equal(t, "https://example.com/review/RV1", payload["html_url"])
 }
 
+func TestReviewSubmitCommandFallsBackToREST(t *testing.T) {
+	originalFactory := apiClientFactory
+	defer func() { apiClientFactory = originalFactory }()
+
+	fake := &commandFakeAPI{}
+	fake.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
+		payload := map[string]interface{}{
+			"data": map[string]interface{}{
+				"submitPullRequestReview": map[string]interface{}{
+					"pullRequestReview": nil,
+				},
+			},
+		}
+		return assignJSON(result, payload)
+	}
+	fake.restFunc = func(method, path string, params map[string]string, body interface{}, result interface{}) error {
+		require.Equal(t, "GET", method)
+		require.Equal(t, "repos/octo/demo/pulls/7/reviews", path)
+		require.Equal(t, "100", params["per_page"])
+		require.Equal(t, "1", params["page"])
+		payload := []map[string]interface{}{
+			{
+				"id":           511,
+				"node_id":      "RV1",
+				"state":        "APPROVED",
+				"submitted_at": "2024-07-04T08:09:10Z",
+				"html_url":     "https://example.com/review/RV1",
+			},
+		}
+		return assignJSON(result, payload)
+	}
+	apiClientFactory = func(host string) ghcli.API { return fake }
+
+	root := newRootCommand()
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"review", "--submit", "--review-id", "RV1", "--event", "APPROVE", "octo/demo#7"})
+
+	err := root.Execute()
+	require.NoError(t, err)
+	assert.Empty(t, stderr.String())
+
+	var payload map[string]interface{}
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &payload))
+	assert.Equal(t, "RV1", payload["id"])
+	assert.Equal(t, "APPROVED", payload["state"])
+	assert.Equal(t, "2024-07-04T08:09:10Z", payload["submitted_at"])
+	assert.Equal(t, float64(511), payload["database_id"])
+	assert.Equal(t, "https://example.com/review/RV1", payload["html_url"])
+}
+
 func TestReviewLatestIDCommand(t *testing.T) {
 	originalFactory := apiClientFactory
 	defer func() { apiClientFactory = originalFactory }()

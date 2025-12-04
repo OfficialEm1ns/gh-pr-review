@@ -1,10 +1,13 @@
 package review
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Agyn-sandbox/gh-pr-review/internal/ghcli"
 	"github.com/Agyn-sandbox/gh-pr-review/internal/resolver"
@@ -201,9 +204,11 @@ func (s *Service) Submit(pr resolver.Identity, input SubmitInput) (*ReviewState,
 		return nil, err
 	}
 
+	reviewNodeID := strings.TrimSpace(input.ReviewID)
 	raw := response.Data.SubmitPullRequestReview.PullRequestReview
-	if len(raw) == 0 {
-		return nil, errors.New("submit review response missing pullRequestReview")
+	trimmedRaw := bytes.TrimSpace(raw)
+	if len(trimmedRaw) == 0 || bytes.Equal(trimmedRaw, []byte("null")) {
+		return s.reviewStateFromREST(pr, reviewNodeID)
 	}
 
 	var review struct {
@@ -213,7 +218,7 @@ func (s *Service) Submit(pr resolver.Identity, input SubmitInput) (*ReviewState,
 		DatabaseID  *int64  `json:"databaseId"`
 		URL         string  `json:"url"`
 	}
-	if err := json.Unmarshal(raw, &review); err != nil {
+	if err := json.Unmarshal(trimmedRaw, &review); err != nil {
 		return nil, fmt.Errorf("decode submit review: %w", err)
 	}
 
@@ -233,6 +238,60 @@ func (s *Service) Submit(pr resolver.Identity, input SubmitInput) (*ReviewState,
 		HTMLURL:     strings.TrimSpace(review.URL),
 	}
 	return &state, nil
+}
+
+func (s *Service) reviewStateFromREST(pr resolver.Identity, reviewNodeID string) (*ReviewState, error) {
+	reviewNodeID = strings.TrimSpace(reviewNodeID)
+	if reviewNodeID == "" {
+		return nil, errors.New("review id required for REST fallback")
+	}
+
+	const pageSize = 100
+	for page := 1; ; page++ {
+		var chunk []restReview
+		params := map[string]string{
+			"per_page": strconv.Itoa(pageSize),
+			"page":     strconv.Itoa(page),
+		}
+		path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", pr.Owner, pr.Repo, pr.Number)
+		if err := s.API.REST("GET", path, params, nil, &chunk); err != nil {
+			return nil, err
+		}
+		if len(chunk) == 0 {
+			break
+		}
+		for _, review := range chunk {
+			if strings.TrimSpace(review.NodeID) != reviewNodeID {
+				continue
+			}
+
+			var submittedAt *string
+			if review.SubmittedAt != nil {
+				ts := review.SubmittedAt.UTC().Format(time.RFC3339)
+				submittedAt = &ts
+			}
+
+			var databaseID *int64
+			if review.ID != 0 {
+				id := review.ID
+				databaseID = &id
+			}
+
+			state := ReviewState{
+				ID:          reviewNodeID,
+				State:       strings.TrimSpace(review.State),
+				SubmittedAt: submittedAt,
+				DatabaseID:  databaseID,
+				HTMLURL:     strings.TrimSpace(review.HTMLURL),
+			}
+			return &state, nil
+		}
+		if len(chunk) < pageSize {
+			break
+		}
+	}
+
+	return nil, fmt.Errorf("review %s not found via REST", reviewNodeID)
 }
 
 func (s *Service) pullRequestIdentifiers(pr resolver.Identity) (string, string, error) {
