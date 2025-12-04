@@ -35,7 +35,7 @@ func newReviewCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Submit, "submit", false, "Submit a pending review")
 
 	cmd.Flags().StringVar(&opts.Commit, "commit", "", "Commit SHA for review start (defaults to current head)")
-	cmd.Flags().StringVar(&opts.ReviewID, "review-id", "", "Review identifier")
+	cmd.Flags().StringVar(&opts.ReviewID, "review-id", "", "Review identifier (REST review ID for --submit; GraphQL ID for --add-comment)")
 	cmd.Flags().StringVar(&opts.Path, "path", "", "File path for inline comment")
 	cmd.Flags().IntVar(&opts.Line, "line", 0, "Line number for inline comment")
 	cmd.Flags().StringVar(&opts.Side, "side", opts.Side, "Diff side for inline comment (LEFT or RIGHT)")
@@ -236,6 +236,9 @@ func runReviewPendingID(cmd *cobra.Command, opts *reviewPendingOptions) error {
 		PerPage:  opts.PerPage,
 	})
 	if err != nil {
+		if strings.TrimSpace(opts.Reviewer) == "" && errors.Is(err, reviewsvc.ErrViewerLoginUnavailable) {
+			return fmt.Errorf("unable to resolve reviewer automatically; pass --reviewer or ensure gh auth login is active")
+		}
 		return err
 	}
 

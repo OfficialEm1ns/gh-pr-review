@@ -1,10 +1,9 @@
 package review
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Agyn-sandbox/gh-pr-review/internal/ghcli"
@@ -15,6 +14,9 @@ import (
 type Service struct {
 	API ghcli.API
 }
+
+// ErrViewerLoginUnavailable indicates the authenticated viewer login could not be resolved via GraphQL.
+var ErrViewerLoginUnavailable = errors.New("viewer login unavailable")
 
 // ReviewState contains metadata about a review after opening or submitting it.
 type ReviewState struct {
@@ -168,147 +170,41 @@ func (s *Service) AddThread(pr resolver.Identity, input ThreadInput) (*ReviewThr
 
 // Submit finalizes a pending review with the given event and optional body.
 func (s *Service) Submit(pr resolver.Identity, input SubmitInput) (*ReviewState, error) {
-	if input.ReviewID == "" {
+	trimmedID := strings.TrimSpace(input.ReviewID)
+	if trimmedID == "" {
 		return nil, errors.New("review id is required")
 	}
 
-	query := `mutation SubmitPullRequestReview($input: SubmitPullRequestReviewInput!) {
-  submitPullRequestReview(input: $input) {
-    pullRequestReview { id state submittedAt databaseId url }
-  }
-}`
-
-	graphqlInput := map[string]interface{}{
-		"pullRequestReviewId": input.ReviewID,
-		"event":               input.Event,
-	}
-	if strings.TrimSpace(input.Body) != "" {
-		graphqlInput["body"] = input.Body
+	if _, err := strconv.ParseInt(trimmedID, 10, 64); err != nil {
+		return nil, fmt.Errorf("invalid review id %q: must be numeric", trimmedID)
 	}
 
-	payload := map[string]interface{}{
-		"input": graphqlInput,
+	eventsPath := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews/%s/events", pr.Owner, pr.Repo, pr.Number, trimmedID)
+	body := map[string]string{"event": input.Event}
+	if trimmedBody := strings.TrimSpace(input.Body); trimmedBody != "" {
+		body["body"] = trimmedBody
 	}
 
-	var response struct {
-		Data struct {
-			SubmitPullRequestReview struct {
-				PullRequestReview json.RawMessage `json:"pullRequestReview"`
-			} `json:"submitPullRequestReview"`
-		} `json:"data"`
-	}
-
-	if err := s.API.GraphQL(query, payload, &response); err != nil {
+	if err := s.API.REST("POST", eventsPath, nil, body, nil); err != nil {
 		return nil, err
 	}
 
-	raw := response.Data.SubmitPullRequestReview.PullRequestReview
-	trimmedRaw := bytes.TrimSpace(raw)
-	if len(trimmedRaw) == 0 || bytes.Equal(trimmedRaw, []byte("null")) {
-		return s.lookupLatestNonPendingByViewer(pr)
-	}
-
+	detailsPath := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews/%s", pr.Owner, pr.Repo, pr.Number, trimmedID)
 	var review struct {
-		ID          string  `json:"id"`
+		ID          int64   `json:"id"`
+		NodeID      string  `json:"node_id"`
 		State       string  `json:"state"`
-		SubmittedAt *string `json:"submittedAt"`
-		DatabaseID  *int64  `json:"databaseId"`
-		URL         string  `json:"url"`
-	}
-	if err := json.Unmarshal(trimmedRaw, &review); err != nil {
-		return nil, fmt.Errorf("decode submit review: %w", err)
+		SubmittedAt *string `json:"submitted_at"`
+		HTMLURL     string  `json:"html_url"`
 	}
 
-	reviewID := strings.TrimSpace(review.ID)
-	if reviewID == "" {
-		return nil, errors.New("submit review response missing review id")
-	}
-
-	var submittedAt *string
-	if review.SubmittedAt != nil {
-		trimmed := strings.TrimSpace(*review.SubmittedAt)
-		if trimmed != "" {
-			submittedAt = &trimmed
-		}
-	}
-
-	stateValue := strings.TrimSpace(review.State)
-	htmlURL := strings.TrimSpace(review.URL)
-
-	state := ReviewState{
-		ID:          reviewID,
-		State:       stateValue,
-		SubmittedAt: submittedAt,
-		DatabaseID:  review.DatabaseID,
-		HTMLURL:     htmlURL,
-	}
-	return &state, nil
-}
-
-func (s *Service) lookupLatestNonPendingByViewer(pr resolver.Identity) (*ReviewState, error) {
-	login, err := s.currentViewer()
-	if err != nil {
+	if err := s.API.REST("GET", detailsPath, nil, nil, &review); err != nil {
 		return nil, err
 	}
 
-	const query = `query LatestNonPendingReview($owner: String!, $name: String!, $number: Int!, $author: String!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      reviews(last: 1, author: $author, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
-        nodes {
-          id
-          state
-          submittedAt
-          databaseId
-          url
-        }
-      }
-    }
-  }
-}`
-
-	variables := map[string]interface{}{
-		"owner":  pr.Owner,
-		"name":   pr.Repo,
-		"number": pr.Number,
-		"author": login,
-	}
-
-	var response struct {
-		Data struct {
-			Repository *struct {
-				PullRequest *struct {
-					Reviews *struct {
-						Nodes []struct {
-							ID          string  `json:"id"`
-							State       string  `json:"state"`
-							SubmittedAt *string `json:"submittedAt"`
-							DatabaseID  *int64  `json:"databaseId"`
-							URL         string  `json:"url"`
-						} `json:"nodes"`
-					} `json:"reviews"`
-				} `json:"pullRequest"`
-			} `json:"repository"`
-		} `json:"data"`
-	}
-
-	if err := s.API.GraphQL(query, variables, &response); err != nil {
-		return nil, err
-	}
-
-	repo := response.Data.Repository
-	if repo == nil || repo.PullRequest == nil || repo.PullRequest.Reviews == nil {
-		return nil, fmt.Errorf("pull request %s/%s#%d not found", pr.Owner, pr.Repo, pr.Number)
-	}
-
-	if len(repo.PullRequest.Reviews.Nodes) == 0 {
-		return nil, fmt.Errorf("no submitted reviews for %s", login)
-	}
-
-	review := repo.PullRequest.Reviews.Nodes[0]
-	reviewID := strings.TrimSpace(review.ID)
-	if reviewID == "" {
-		return nil, errors.New("latest review missing id")
+	nodeID := strings.TrimSpace(review.NodeID)
+	if nodeID == "" {
+		return nil, errors.New("review response missing node identifier")
 	}
 
 	var submittedAt *string
@@ -320,11 +216,11 @@ func (s *Service) lookupLatestNonPendingByViewer(pr resolver.Identity) (*ReviewS
 	}
 
 	state := ReviewState{
-		ID:          reviewID,
+		ID:          nodeID,
 		State:       strings.TrimSpace(review.State),
 		SubmittedAt: submittedAt,
-		DatabaseID:  review.DatabaseID,
-		HTMLURL:     strings.TrimSpace(review.URL),
+		DatabaseID:  &review.ID,
+		HTMLURL:     strings.TrimSpace(review.HTMLURL),
 	}
 	return &state, nil
 }
@@ -346,7 +242,7 @@ func (s *Service) currentViewer() (string, error) {
 
 	login := strings.TrimSpace(response.Data.Viewer.Login)
 	if login == "" {
-		return "", errors.New("viewer login unavailable")
+		return "", ErrViewerLoginUnavailable
 	}
 
 	return login, nil

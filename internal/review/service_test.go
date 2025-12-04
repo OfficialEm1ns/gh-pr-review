@@ -3,7 +3,6 @@ package review
 import (
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/Agyn-sandbox/gh-pr-review/internal/resolver"
@@ -89,175 +88,105 @@ func TestServiceAddThread(t *testing.T) {
 
 func TestServiceSubmit(t *testing.T) {
 	api := &fakeAPI{}
-	api.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
-		payload := map[string]interface{}{
-			"data": map[string]interface{}{
-				"submitPullRequestReview": map[string]interface{}{
-					"pullRequestReview": map[string]interface{}{
-						"id":          " RV1 ",
-						"state":       "COMMENTED ",
-						"submittedAt": " 2024-05-01T12:00:00Z ",
-						"databaseId":  654,
-						"url":         "https://example.com/review/RV1 ",
-					},
-				},
-			},
+	call := 0
+	api.restFunc = func(method, path string, params map[string]string, body interface{}, result interface{}) error {
+		call++
+		switch call {
+		case 1:
+			require.Equal(t, "POST", method)
+			require.Equal(t, "repos/octo/demo/pulls/7/reviews/511/events", path)
+			require.Nil(t, params)
+			require.IsType(t, map[string]string{}, body)
+			payload := body.(map[string]string)
+			require.Equal(t, "COMMENT", payload["event"])
+			require.Equal(t, "Looks good", payload["body"])
+			return nil
+		case 2:
+			require.Equal(t, "GET", method)
+			require.Equal(t, "repos/octo/demo/pulls/7/reviews/511", path)
+			require.Nil(t, params)
+			response := map[string]interface{}{
+				"id":           511,
+				"node_id":      " RV1 ",
+				"state":        " COMMENTED ",
+				"submitted_at": " 2024-05-01T12:00:00Z ",
+				"html_url":     " https://example.com/review/RV1 ",
+			}
+			return assign(result, response)
+		default:
+			return errors.New("unexpected REST call")
 		}
-		return assign(result, payload)
 	}
 
 	svc := NewService(api)
 	pr := resolver.Identity{Owner: "octo", Repo: "demo", Number: 7, Host: "github.com"}
-	state, err := svc.Submit(pr, SubmitInput{ReviewID: "RV1", Event: "COMMENT"})
+	state, err := svc.Submit(pr, SubmitInput{ReviewID: " 511 ", Event: "COMMENT", Body: " Looks good "})
 	require.NoError(t, err)
 	assert.Equal(t, "RV1", state.ID)
 	assert.Equal(t, "COMMENTED", state.State)
 	require.NotNil(t, state.SubmittedAt)
 	assert.Equal(t, "2024-05-01T12:00:00Z", *state.SubmittedAt)
 	require.NotNil(t, state.DatabaseID)
-	assert.Equal(t, int64(654), *state.DatabaseID)
+	assert.Equal(t, int64(511), *state.DatabaseID)
 	assert.Equal(t, "https://example.com/review/RV1", state.HTMLURL)
-}
-
-func TestServiceSubmitFallsBackToViewerLookup(t *testing.T) {
-	api := &fakeAPI{}
-	call := 0
-	api.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
-		call++
-		switch {
-		case strings.Contains(query, "SubmitPullRequestReview"):
-			payload := map[string]interface{}{
-				"data": map[string]interface{}{
-					"submitPullRequestReview": map[string]interface{}{
-						"pullRequestReview": nil,
-					},
-				},
-			}
-			return assign(result, payload)
-		case strings.Contains(query, "ViewerLogin"):
-			payload := map[string]interface{}{
-				"data": map[string]interface{}{
-					"viewer": map[string]interface{}{
-						"login": "casey",
-					},
-				},
-			}
-			return assign(result, payload)
-		case strings.Contains(query, "LatestNonPendingReview"):
-			require.Equal(t, "octo", variables["owner"])
-			require.Equal(t, "demo", variables["name"])
-			require.EqualValues(t, 7, variables["number"])
-			require.Equal(t, "casey", variables["author"])
-			payload := map[string]interface{}{
-				"data": map[string]interface{}{
-					"repository": map[string]interface{}{
-						"pullRequest": map[string]interface{}{
-							"reviews": map[string]interface{}{
-								"nodes": []map[string]interface{}{
-									{
-										"id":          " RV99 ",
-										"state":       " APPROVED ",
-										"submittedAt": "2024-07-01T09:00:00Z ",
-										"databaseId":  2024,
-										"url":         " https://example.com/review/RV99 ",
-									},
-								},
-							},
-						},
-					},
-				},
-			}
-			return assign(result, payload)
-		default:
-			return errors.New("unexpected query: " + query)
-		}
-	}
-
-	svc := NewService(api)
-	pr := resolver.Identity{Owner: "octo", Repo: "demo", Number: 7, Host: "github.com"}
-	state, err := svc.Submit(pr, SubmitInput{ReviewID: "RV1", Event: "COMMENT"})
-	require.NoError(t, err)
-	assert.Equal(t, "RV99", state.ID)
-	assert.Equal(t, "APPROVED", state.State)
-	require.NotNil(t, state.SubmittedAt)
-	assert.Equal(t, "2024-07-01T09:00:00Z", *state.SubmittedAt)
-	require.NotNil(t, state.DatabaseID)
-	assert.Equal(t, int64(2024), *state.DatabaseID)
-	assert.Equal(t, "https://example.com/review/RV99", state.HTMLURL)
-	assert.Equal(t, 3, call)
-}
-
-func TestServiceSubmitFallbackMissingReview(t *testing.T) {
-	api := &fakeAPI{}
-	api.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
-		switch {
-		case strings.Contains(query, "SubmitPullRequestReview"):
-			payload := map[string]interface{}{
-				"data": map[string]interface{}{
-					"submitPullRequestReview": map[string]interface{}{
-						"pullRequestReview": nil,
-					},
-				},
-			}
-			return assign(result, payload)
-		case strings.Contains(query, "ViewerLogin"):
-			payload := map[string]interface{}{
-				"data": map[string]interface{}{
-					"viewer": map[string]interface{}{
-						"login": "octocat",
-					},
-				},
-			}
-			return assign(result, payload)
-		case strings.Contains(query, "LatestNonPendingReview"):
-			payload := map[string]interface{}{
-				"data": map[string]interface{}{
-					"repository": map[string]interface{}{
-						"pullRequest": map[string]interface{}{
-							"reviews": map[string]interface{}{
-								"nodes": []map[string]interface{}{},
-							},
-						},
-					},
-				},
-			}
-			return assign(result, payload)
-		default:
-			return errors.New("unexpected query: " + query)
-		}
-	}
-
-	svc := NewService(api)
-	pr := resolver.Identity{Owner: "octo", Repo: "demo", Number: 7, Host: "github.com"}
-	_, err := svc.Submit(pr, SubmitInput{ReviewID: "RV1", Event: "APPROVE"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no submitted reviews for octocat")
+	assert.Equal(t, 2, call)
 }
 
 func TestServiceSubmitErrorOnMissingReviewID(t *testing.T) {
 	api := &fakeAPI{}
-	api.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
-		payload := map[string]interface{}{
-			"data": map[string]interface{}{
-				"submitPullRequestReview": map[string]interface{}{
-					"pullRequestReview": map[string]interface{}{
-						"id":          " ",
-						"state":       "PENDING",
-						"submittedAt": nil,
-						"databaseId":  123,
-						"url":         "https://example.com/review",
-					},
-				},
-			},
-		}
-		return assign(result, payload)
+	api.restFunc = func(method, path string, params map[string]string, body interface{}, result interface{}) error {
+		t.Fatalf("unexpected REST call: %s %s", method, path)
+		return nil
 	}
 
 	svc := NewService(api)
 	pr := resolver.Identity{Owner: "octo", Repo: "demo", Number: 7, Host: "github.com"}
-	_, err := svc.Submit(pr, SubmitInput{ReviewID: "RV1", Event: "APPROVE"})
+	_, err := svc.Submit(pr, SubmitInput{ReviewID: " ", Event: "APPROVE"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing review id")
+	assert.Contains(t, err.Error(), "review id is required")
+}
+
+func TestServiceSubmitErrorOnNonNumericReviewID(t *testing.T) {
+	api := &fakeAPI{}
+	api.restFunc = func(method, path string, params map[string]string, body interface{}, result interface{}) error {
+		t.Fatalf("unexpected REST call: %s %s", method, path)
+		return nil
+	}
+
+	svc := NewService(api)
+	pr := resolver.Identity{Owner: "octo", Repo: "demo", Number: 7, Host: "github.com"}
+	_, err := svc.Submit(pr, SubmitInput{ReviewID: "RV1", Event: "COMMENT"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be numeric")
+}
+
+func TestServiceSubmitErrorOnMissingNodeID(t *testing.T) {
+	api := &fakeAPI{}
+	call := 0
+	api.restFunc = func(method, path string, params map[string]string, body interface{}, result interface{}) error {
+		call++
+		switch call {
+		case 1:
+			return nil
+		case 2:
+			payload := map[string]interface{}{
+				"id":           511,
+				"node_id":      " ",
+				"state":        "COMMENTED",
+				"submitted_at": nil,
+				"html_url":     "https://example.com/review/RV1",
+			}
+			return assign(result, payload)
+		default:
+			return errors.New("unexpected REST call")
+		}
+	}
+
+	svc := NewService(api)
+	pr := resolver.Identity{Owner: "octo", Repo: "demo", Number: 7, Host: "github.com"}
+	_, err := svc.Submit(pr, SubmitInput{ReviewID: "511", Event: "COMMENT"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing node identifier")
 }
 
 func assign(result interface{}, payload interface{}) error {

@@ -100,21 +100,32 @@ func TestReviewSubmitCommand(t *testing.T) {
 	defer func() { apiClientFactory = originalFactory }()
 
 	fake := &commandFakeAPI{}
-	fake.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
-		payload := map[string]interface{}{
-			"data": map[string]interface{}{
-				"submitPullRequestReview": map[string]interface{}{
-					"pullRequestReview": map[string]interface{}{
-						"id":          "RV1",
-						"state":       " COMMENTED ",
-						"submittedAt": "2024-05-01T12:00:00Z ",
-						"databaseId":  99,
-						"url":         " https://example.com/review/RV1 ",
-					},
-				},
-			},
+	call := 0
+	fake.restFunc = func(method, path string, params map[string]string, body interface{}, result interface{}) error {
+		call++
+		switch call {
+		case 1:
+			require.Equal(t, "POST", method)
+			require.Equal(t, "repos/octo/demo/pulls/7/reviews/511/events", path)
+			payload, ok := body.(map[string]string)
+			require.True(t, ok)
+			require.Equal(t, "COMMENT", payload["event"])
+			require.Equal(t, "Please update", payload["body"])
+			return nil
+		case 2:
+			require.Equal(t, "GET", method)
+			require.Equal(t, "repos/octo/demo/pulls/7/reviews/511", path)
+			response := map[string]interface{}{
+				"id":           511,
+				"node_id":      "RV1",
+				"state":        "COMMENTED",
+				"submitted_at": "2024-05-01T12:00:00Z",
+				"html_url":     "https://example.com/review/RV1",
+			}
+			return assignJSON(result, response)
+		default:
+			return errors.New("unexpected REST call")
 		}
-		return assignJSON(result, payload)
 	}
 	apiClientFactory = func(host string) ghcli.API { return fake }
 
@@ -123,7 +134,7 @@ func TestReviewSubmitCommand(t *testing.T) {
 	stderr := &bytes.Buffer{}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	root.SetArgs([]string{"review", "--submit", "--review-id", "RV1", "--event", "COMMENT", "octo/demo#7"})
+	root.SetArgs([]string{"review", "--submit", "--review-id", "511", "--event", "COMMENT", "--body", "Please update", "octo/demo#7"})
 
 	err := root.Execute()
 	require.NoError(t, err)
@@ -134,58 +145,55 @@ func TestReviewSubmitCommand(t *testing.T) {
 	assert.Equal(t, "RV1", payload["id"])
 	assert.Equal(t, "COMMENTED", payload["state"])
 	assert.Equal(t, "2024-05-01T12:00:00Z", payload["submitted_at"])
-	assert.Equal(t, float64(99), payload["database_id"])
+	assert.Equal(t, float64(511), payload["database_id"])
 	assert.Equal(t, "https://example.com/review/RV1", payload["html_url"])
+	assert.Equal(t, 2, call)
 }
 
-func TestReviewSubmitCommandFallbackGraphQL(t *testing.T) {
+func TestReviewSubmitCommandRequiresNumericReviewID(t *testing.T) {
 	originalFactory := apiClientFactory
 	defer func() { apiClientFactory = originalFactory }()
 
 	fake := &commandFakeAPI{}
-	fake.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
-		switch {
-		case strings.Contains(query, "SubmitPullRequestReview"):
-			payload := obj{
-				"data": obj{
-					"submitPullRequestReview": obj{
-						"pullRequestReview": nil,
-					},
-				},
-			}
-			return assignJSON(result, payload)
-		case strings.Contains(query, "ViewerLogin"):
-			payload := obj{
-				"data": obj{
-					"viewer": obj{
-						"login": "casey",
-					},
-				},
-			}
-			return assignJSON(result, payload)
-		case strings.Contains(query, "LatestNonPendingReview"):
-			payload := obj{
-				"data": obj{
-					"repository": obj{
-						"pullRequest": obj{
-							"reviews": obj{
-								"nodes": objSlice{
-									obj{
-										"id":          "RV_lookup",
-										"state":       "COMMENTED",
-										"submittedAt": "2024-07-04T15:00:00Z",
-										"databaseId":  555,
-										"url":         "https://example.com/review/RV_lookup",
-									},
-								},
-							},
-						},
-					},
-				},
+	fake.restFunc = func(method, path string, params map[string]string, body interface{}, result interface{}) error {
+		return errors.New("unexpected REST call")
+	}
+	apiClientFactory = func(host string) ghcli.API { return fake }
+
+	root := newRootCommand()
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"review", "--submit", "--review-id", "RV1", "--event", "APPROVE", "octo/demo#7"})
+
+	err := root.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be numeric")
+}
+
+func TestReviewSubmitCommandErrorsOnMissingNodeID(t *testing.T) {
+	originalFactory := apiClientFactory
+	defer func() { apiClientFactory = originalFactory }()
+
+	fake := &commandFakeAPI{}
+	call := 0
+	fake.restFunc = func(method, path string, params map[string]string, body interface{}, result interface{}) error {
+		call++
+		switch call {
+		case 1:
+			return nil
+		case 2:
+			payload := map[string]interface{}{
+				"id":           511,
+				"node_id":      " ",
+				"state":        "COMMENTED",
+				"submitted_at": "2024-05-01T12:00:00Z",
+				"html_url":     "https://example.com/review/RV1",
 			}
 			return assignJSON(result, payload)
 		default:
-			return errors.New("unexpected query: " + query)
+			return errors.New("unexpected REST call")
 		}
 	}
 	apiClientFactory = func(host string) ghcli.API { return fake }
@@ -195,73 +203,11 @@ func TestReviewSubmitCommandFallbackGraphQL(t *testing.T) {
 	stderr := &bytes.Buffer{}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	root.SetArgs([]string{"review", "--submit", "--review-id", "RV1", "--event", "APPROVE", "octo/demo#7"})
+	root.SetArgs([]string{"review", "--submit", "--review-id", "511", "--event", "COMMENT", "octo/demo#7"})
 
 	err := root.Execute()
-	require.NoError(t, err)
-	assert.Empty(t, stderr.String())
-
-	var payload map[string]interface{}
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &payload))
-	assert.Equal(t, "RV_lookup", payload["id"])
-	assert.Equal(t, "COMMENTED", payload["state"])
-	assert.Equal(t, "2024-07-04T15:00:00Z", payload["submitted_at"])
-	assert.Equal(t, float64(555), payload["database_id"])
-	assert.Equal(t, "https://example.com/review/RV_lookup", payload["html_url"])
-}
-
-func TestReviewSubmitCommandFallsBackToREST(t *testing.T) {
-	t.Skip("REST fallback removed")
-	originalFactory := apiClientFactory
-	defer func() { apiClientFactory = originalFactory }()
-
-	fake := &commandFakeAPI{}
-	fake.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
-		payload := map[string]interface{}{
-			"data": map[string]interface{}{
-				"submitPullRequestReview": map[string]interface{}{
-					"pullRequestReview": nil,
-				},
-			},
-		}
-		return assignJSON(result, payload)
-	}
-	fake.restFunc = func(method, path string, params map[string]string, body interface{}, result interface{}) error {
-		require.Equal(t, "GET", method)
-		require.Equal(t, "repos/octo/demo/pulls/7/reviews", path)
-		require.Equal(t, "100", params["per_page"])
-		require.Equal(t, "1", params["page"])
-		payload := []map[string]interface{}{
-			{
-				"id":           511,
-				"node_id":      "RV1",
-				"state":        "APPROVED",
-				"submitted_at": "2024-07-04T08:09:10Z",
-				"html_url":     "https://example.com/review/RV1",
-			},
-		}
-		return assignJSON(result, payload)
-	}
-	apiClientFactory = func(host string) ghcli.API { return fake }
-
-	root := newRootCommand()
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-	root.SetOut(stdout)
-	root.SetErr(stderr)
-	root.SetArgs([]string{"review", "--submit", "--review-id", "RV1", "--event", "APPROVE", "octo/demo#7"})
-
-	err := root.Execute()
-	require.NoError(t, err)
-	assert.Empty(t, stderr.String())
-
-	var payload map[string]interface{}
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &payload))
-	assert.Equal(t, "RV1", payload["id"])
-	assert.Equal(t, "APPROVED", payload["state"])
-	assert.Equal(t, "2024-07-04T08:09:10Z", payload["submitted_at"])
-	assert.Equal(t, float64(511), payload["database_id"])
-	assert.Equal(t, "https://example.com/review/RV1", payload["html_url"])
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing node identifier")
 }
 
 func TestReviewLatestIDCommand(t *testing.T) {
@@ -316,102 +262,6 @@ func TestReviewLatestIDCommand(t *testing.T) {
 }
 
 func TestReviewPendingIDCommand(t *testing.T) {
-	t.Skip("REST fallback removed")
-	originalFactory := apiClientFactory
-	defer func() { apiClientFactory = originalFactory }()
-
-	fake := &commandFakeAPI{}
-	fake.restFunc = func(method, path string, params map[string]string, body interface{}, result interface{}) error {
-		switch path {
-		case "user":
-			return assignJSON(result, map[string]interface{}{"login": "casey"})
-		case "repos/octo/demo/pulls/7/reviews":
-			require.Equal(t, "100", params["per_page"])
-			require.Equal(t, "1", params["page"])
-			payload := []map[string]interface{}{
-				{
-					"id":                 15,
-					"node_id":            "R_pending_15",
-					"state":              "PENDING",
-					"author_association": "MEMBER",
-					"html_url":           "https://example.com/pending",
-					"user":               map[string]interface{}{"login": "casey", "id": 77},
-				},
-			}
-			return assignJSON(result, payload)
-		default:
-			return errors.New("unexpected path: " + path)
-		}
-	}
-	apiClientFactory = func(host string) ghcli.API { return fake }
-
-	root := newRootCommand()
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-	root.SetOut(stdout)
-	root.SetErr(stderr)
-	root.SetArgs([]string{"review", "pending-id", "octo/demo#7"})
-
-	err := root.Execute()
-	require.NoError(t, err)
-	assert.Empty(t, stderr.String())
-
-	var payload map[string]interface{}
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &payload))
-	assert.Equal(t, "R_pending_15", payload["id"])
-	assert.Equal(t, float64(15), payload["database_id"])
-	assert.Equal(t, "PENDING", payload["state"])
-	assert.Equal(t, "https://example.com/pending", payload["html_url"])
-
-	user, ok := payload["user"].(map[string]interface{})
-	require.True(t, ok)
-	assert.Equal(t, "casey", user["login"])
-}
-
-func TestReviewSubmitCommand_GraphQLOnly(t *testing.T) {
-	originalFactory := apiClientFactory
-	defer func() { apiClientFactory = originalFactory }()
-
-	fake := &commandFakeAPI{}
-	fake.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
-		payload := obj{
-			"data": obj{
-				"submitPullRequestReview": obj{
-					"pullRequestReview": obj{
-						"id":          "RV1",
-						"state":       "COMMENTED",
-						"submittedAt": "2024-06-01T12:00:00Z",
-						"databaseId":  12345,
-						"url":         "https://example.com/review/RV1",
-					},
-				},
-			},
-		}
-		return assignJSON(result, payload)
-	}
-	apiClientFactory = func(host string) ghcli.API { return fake }
-
-	root := newRootCommand()
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-	root.SetOut(stdout)
-	root.SetErr(stderr)
-	root.SetArgs([]string{"review", "--submit", "--review-id", "RV1", "--event", "COMMENT", "octo/demo#7"})
-
-	err := root.Execute()
-	require.NoError(t, err)
-	assert.Empty(t, stderr.String())
-
-	var payload map[string]interface{}
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &payload))
-	assert.Equal(t, "RV1", payload["id"])
-	assert.Equal(t, "COMMENTED", payload["state"])
-	assert.Equal(t, "2024-06-01T12:00:00Z", payload["submitted_at"])
-	assert.Equal(t, float64(12345), payload["database_id"])
-	assert.Equal(t, "https://example.com/review/RV1", payload["html_url"])
-}
-
-func TestReviewPendingIDCommand_GraphQLOnly(t *testing.T) {
 	originalFactory := apiClientFactory
 	defer func() { apiClientFactory = originalFactory }()
 
@@ -439,28 +289,21 @@ func TestReviewPendingIDCommand_GraphQLOnly(t *testing.T) {
 									"databaseId": 10,
 									"url":        "https://example.com/review/10",
 									"state":      "PENDING",
-									"author": obj{
-										"login": "casey",
-									},
-									"updatedAt": "2024-06-01T12:00:00Z",
-									"createdAt": "2024-06-01T11:00:00Z",
+									"author":     obj{"login": "casey"},
+									"updatedAt":  "2024-06-01T12:00:00Z",
+									"createdAt":  "2024-06-01T11:00:00Z",
 								},
 								obj{
 									"id":         "PRR_node_new",
 									"databaseId": 22,
 									"url":        "https://example.com/review/22",
 									"state":      "PENDING",
-									"author": obj{
-										"login": "casey",
-									},
-									"updatedAt": "2024-06-01T13:00:00Z",
-									"createdAt": "2024-06-01T12:30:00Z",
+									"author":     obj{"login": "casey"},
+									"updatedAt":  "2024-06-01T13:00:00Z",
+									"createdAt":  "2024-06-01T12:30:00Z",
 								},
 							},
-							"pageInfo": obj{
-								"hasNextPage": false,
-								"endCursor":   "",
-							},
+							"pageInfo": obj{"hasNextPage": false, "endCursor": ""},
 						},
 					},
 				},
@@ -491,6 +334,34 @@ func TestReviewPendingIDCommand_GraphQLOnly(t *testing.T) {
 	user, ok := payload["user"].(obj)
 	require.True(t, ok)
 	assert.Equal(t, "casey", user["login"])
-	_, hasID := user["id"]
-	assert.False(t, hasID)
+}
+
+func TestReviewPendingIDCommandViewerMissing(t *testing.T) {
+	originalFactory := apiClientFactory
+	defer func() { apiClientFactory = originalFactory }()
+
+	fake := &commandFakeAPI{}
+	fake.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
+		if strings.Contains(query, "ViewerLogin") {
+			payload := obj{
+				"data": obj{
+					"viewer": obj{
+						"login": " ",
+					},
+				},
+			}
+			return assignJSON(result, payload)
+		}
+		return errors.New("unexpected query: " + query)
+	}
+	apiClientFactory = func(host string) ghcli.API { return fake }
+
+	root := newReviewPendingIDCommand()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"octo/demo#7"})
+
+	err := root.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pass --reviewer")
 }

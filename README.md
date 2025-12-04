@@ -61,12 +61,16 @@ gh pr-review review --add-comment \
   --body "nit: use helper" \
   owner/repo#42
 
-# Submit the review with a specific event
+# Submit the review with a specific event (REST review ID required)
 gh pr-review review --submit \
-  --review-id R_kwM123456789 \
+  --review-id 3531807471 \
   --event REQUEST_CHANGES \
   --body "Please update tests" \
   owner/repo#42
+
+The `--review-id` flag accepts different identifier types depending on the
+action: use the numeric REST review ID when submitting, and GraphQL review node
+IDs for operations like `--add-comment`.
 ```
 
 ### Manage review threads
@@ -121,8 +125,9 @@ gh pr-review threads find --comment_id 2582545223 owner/repo#42
 Outputs are pure JSON with REST/GraphQL field names and include only fields that
 are present from the source APIs (no null placeholders). Pending-review helpers
 use GitHub's GraphQL API exclusively and fail fast if required payloads are
-missing. The `threads find` command always emits exactly `{ "id",
-"isResolved" }`.
+missing. When the authenticated viewer login cannot be determined, the command
+exits with guidance to pass `--reviewer`. The `threads find` command always
+emits exactly `{ "id", "isResolved" }`.
 
 ## Output conventions
 
