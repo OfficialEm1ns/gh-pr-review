@@ -27,7 +27,13 @@ gh pr-review review --submit \
   --event APPROVE \
   --body "Looks good" \
   owner/repo#42
+
+# Fetch the latest pending review identifier (GraphQL only)
+gh pr-review review pending-id --reviewer octocat owner/repo#42
 ```
+
+> **Note:** Pending-review helpers use GitHub's GraphQL API exclusively. The
+> command fails fast if the GraphQL payload omits the requested review data.
 
 ## 2. Read and reply to inline comments
 

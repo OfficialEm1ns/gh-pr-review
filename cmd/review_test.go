@@ -11,6 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type obj = map[string]interface{}
+type objSlice = []map[string]interface{}
+
 func TestReviewStartCommand(t *testing.T) {
 	originalFactory := apiClientFactory
 	defer func() { apiClientFactory = originalFactory }()
@@ -135,6 +138,7 @@ func TestReviewSubmitCommand(t *testing.T) {
 }
 
 func TestReviewSubmitCommandFallsBackToREST(t *testing.T) {
+	t.Skip("REST fallback removed")
 	originalFactory := apiClientFactory
 	defer func() { apiClientFactory = originalFactory }()
 
@@ -239,6 +243,7 @@ func TestReviewLatestIDCommand(t *testing.T) {
 }
 
 func TestReviewPendingIDCommand(t *testing.T) {
+	t.Skip("REST fallback removed")
 	originalFactory := apiClientFactory
 	defer func() { apiClientFactory = originalFactory }()
 
@@ -288,4 +293,125 @@ func TestReviewPendingIDCommand(t *testing.T) {
 	user, ok := payload["user"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "casey", user["login"])
+}
+
+func TestReviewSubmitCommand_GraphQLOnly(t *testing.T) {
+	originalFactory := apiClientFactory
+	defer func() { apiClientFactory = originalFactory }()
+
+	fake := &commandFakeAPI{}
+	fake.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
+		payload := obj{
+			"data": obj{
+				"submitPullRequestReview": obj{
+					"pullRequestReview": obj{
+						"id":          "RV1",
+						"state":       "COMMENTED",
+						"submittedAt": "2024-06-01T12:00:00Z",
+						"databaseId":  12345,
+						"url":         "https://example.com/review/RV1",
+					},
+				},
+			},
+		}
+		return assignJSON(result, payload)
+	}
+	apiClientFactory = func(host string) ghcli.API { return fake }
+
+	root := newRootCommand()
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"review", "--submit", "--review-id", "RV1", "--event", "COMMENT", "octo/demo#7"})
+
+	err := root.Execute()
+	require.NoError(t, err)
+	assert.Empty(t, stderr.String())
+
+	var payload map[string]interface{}
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &payload))
+	assert.Equal(t, "RV1", payload["id"])
+	assert.Equal(t, "COMMENTED", payload["state"])
+	assert.Equal(t, "2024-06-01T12:00:00Z", payload["submitted_at"])
+	assert.Equal(t, float64(12345), payload["database_id"])
+	assert.Equal(t, "https://example.com/review/RV1", payload["html_url"])
+}
+
+func TestReviewPendingIDCommand_GraphQLOnly(t *testing.T) {
+	originalFactory := apiClientFactory
+	defer func() { apiClientFactory = originalFactory }()
+
+	fake := &commandFakeAPI{}
+	fake.graphqlFunc = func(query string, variables map[string]interface{}, result interface{}) error {
+		payload := obj{
+			"data": obj{
+				"viewer": obj{
+					"login":      "casey",
+					"databaseId": 77,
+				},
+				"repository": obj{
+					"pullRequest": obj{
+						"reviews": obj{
+							"nodes": objSlice{
+								obj{
+									"id":         "PRR_node_old",
+									"databaseId": 10,
+									"url":        "https://example.com/review/10",
+									"state":      "PENDING",
+									"author": obj{
+										"login":      "casey",
+										"databaseId": 77,
+									},
+									"updatedAt": "2024-06-01T12:00:00Z",
+									"createdAt": "2024-06-01T11:00:00Z",
+								},
+								obj{
+									"id":         "PRR_node_new",
+									"databaseId": 22,
+									"url":        "https://example.com/review/22",
+									"state":      "PENDING",
+									"author": obj{
+										"login":      "casey",
+										"databaseId": 77,
+									},
+									"updatedAt": "2024-06-01T13:00:00Z",
+									"createdAt": "2024-06-01T12:30:00Z",
+								},
+							},
+							"pageInfo": obj{
+								"hasNextPage": false,
+								"endCursor":   "",
+							},
+						},
+					},
+				},
+			},
+		}
+		return assignJSON(result, payload)
+	}
+	apiClientFactory = func(host string) ghcli.API { return fake }
+
+	root := newRootCommand()
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"review", "pending-id", "octo/demo#7"})
+
+	err := root.Execute()
+	require.NoError(t, err)
+	assert.Empty(t, stderr.String())
+
+	var payload obj
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &payload))
+	assert.Equal(t, "PRR_node_new", payload["id"])
+	assert.Equal(t, float64(22), payload["database_id"])
+	assert.Equal(t, "PENDING", payload["state"])
+	assert.Equal(t, "https://example.com/review/22", payload["html_url"])
+
+	user, ok := payload["user"].(obj)
+	require.True(t, ok)
+	assert.Equal(t, "casey", user["login"])
+	assert.Equal(t, float64(77), user["id"])
 }
